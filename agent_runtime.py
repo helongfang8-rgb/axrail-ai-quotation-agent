@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 from bedrock_agentcore import BedrockAgentCoreApp
 from quotation_agent.aws_adapter import GatewayTools, MemoryState
+from quotation_agent.bedrock_extraction import BedrockFieldExtractor
 from quotation_agent.workflow import build_quote, write_outputs
 
 app = BedrockAgentCoreApp()
@@ -33,8 +34,10 @@ def invoke(payload):
             paths.append(path)
         context = {k:previous[k] for k in ("rfq_no", "customer", "buyer_name", "delivery", "requested_discount_pct") if previous and k in previous}
         context.update(payload.get("context") or {})
+        model_id = os.environ.get("BEDROCK_EXTRACTION_MODEL_ID", "").strip()
+        extractor = BedrockFieldExtractor(model_id=model_id) if model_id else None
         quote = build_quote(paths, context, price_tool=gateway.price_line,
-                            approval_tool=gateway.approval_policy)
+                            approval_tool=gateway.approval_policy, extractor=extractor)
         output = write_outputs(quote, Path(tmp) / "out")
         pdf_b64 = base64.b64encode((output / "quotation.pdf").read_bytes()).decode()
     memory.save(actor_id, session_id, quote)

@@ -100,7 +100,8 @@ def main():
     config = {"AWS_REGION":REGION, "AGENTCORE_GATEWAY_URL":gateway["gatewayUrl"],
               "AGENTCORE_MEMORY_ID":memory["id"],
               "AGENTCORE_PRICE_TOOL":"QuotationTools___price_line",
-              "AGENTCORE_APPROVAL_TOOL":"QuotationTools___approval_policy"}
+              "AGENTCORE_APPROVAL_TOOL":"QuotationTools___approval_policy",
+              "BEDROCK_EXTRACTION_MODEL_ID":""}
     (ROOT / ".env.aws.example").write_text("".join(f"{k}={v}\n" for k,v in config.items()))
     print(json.dumps({"account":account,"region":REGION,"lambda_arn":lambda_arn,
                       "gateway_id":gateway_id,"memory_id":config["AGENTCORE_MEMORY_ID"],

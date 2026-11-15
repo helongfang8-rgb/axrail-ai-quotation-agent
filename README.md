@@ -1,6 +1,6 @@
 # AI Quotation Agent for a CNC Contract Manufacturer
 
-An auditable, review-first RFQ workflow for the Axrail AI Application Engineer take-home. The sample data is fictional. The implementation parses email text, Excel, PowerPoint and a PDF drawing; merges duplicate parts; applies fixed pricing and approval rules; and writes a quotation PDF, buyer email draft and review list. It uses Amazon Bedrock AgentCore Runtime, Gateway (MCP) and Memory in AWS Singapore. The local scenarios and a live cloud invocation with the supplied four sample files have been verified.
+An auditable, review-first RFQ workflow for the Axrail AI Application Engineer take-home. The sample data is fictional. The implementation parses email text, Excel, PowerPoint and a PDF drawing; merges duplicate parts; applies fixed pricing and approval rules; and writes a quotation PDF, buyer email draft and review list. It uses Amazon Bedrock AgentCore Runtime, Gateway (MCP) and Memory in AWS Singapore. The deterministic local scenarios and a live cloud invocation with the supplied four sample files have been verified. Optional Bedrock field extraction is off by default and has not been live-tested in this account.
 
 ## Local run
 
@@ -19,6 +19,10 @@ quote-rfq inputs/part_list.xlsx inputs/part_spec.pptx --context demo_context.jso
 quote-rfq inputs/rfq_email.txt inputs/part_list.xlsx inputs/part_spec.pptx inputs/drawing_CVR-310_RevB.pdf --context demo_context.json --output output_all
 ```
 
+For local Bedrock extraction, install the optional SDK with `pip install -e '.[bedrock]'` as well.
+
+To opt into Bedrock extraction for the email/PDF text, set `BEDROCK_EXTRACTION_MODEL_ID` to a model or inference profile enabled for your account, configure AWS credentials with `bedrock:InvokeModel`, then add `--bedrock-extraction` to a `quote-rfq` command. This makes a billable model request. The flag is deliberately opt-in; the local demo script does not call a model.
+
 Each output directory contains `quotation.pdf`, `quote.json`, `review.json` and `email_draft.txt`. `demo_context.json` supplies the same RFQ/customer/discount metadata to the attachment-only run; otherwise Excel and slides do not carry the buyer's discount request. The email-only and Excel-plus-PowerPoint runs produce the same priced lines and **MYR 74,684.00** total. Adding the PDF drawing reveals a quantity conflict for CVR-310 (1,000 vs 800), holds that line and produces **MYR 24,334.00** for the remaining priced lines. These are draft subtotals, not an accepted customer offer.
 
 ## Architecture and decisions
@@ -26,7 +30,9 @@ Each output directory contains `quotation.pdf`, `quote.json`, `review.json` and 
 ```mermaid
 flowchart LR
   A[RFQ email / Excel / PPTX / PDF] --> B[Runtime: parse and normalize]
-  B --> C[Conflict and completeness checks]
+  B -. optional .-> X[Bedrock: propose fields with evidence]
+  X -. validated proposals .-> C[Conflict and completeness checks]
+  B --> C
   C --> D[Gateway MCP: Lambda price_line]
   D --> E[Gateway MCP: Lambda approval_policy]
   E --> F[Runtime: PDF, draft email, review list]
@@ -34,13 +40,14 @@ flowchart LR
   F --> H[Human estimator and sales manager]
 ```
 
-The agent is an explicit workflow. It can parse, reconcile, calculate, prepare documents and suggest review items. It cannot invent missing rates, approve a quote, apply the requested 15% discount or send an email. This keeps the price path deterministic and auditable. A Bedrock model is deliberately not in the pricing path. For arbitrary free-form documents, a future Bedrock extraction step could propose fields, with schema validation and source checks before the deterministic tools run.
+The agent is an explicit workflow. It can parse, reconcile, calculate, prepare documents and suggest review items. It cannot invent missing rates, approve a quote, apply the requested 15% discount or send an email. This keeps the price path deterministic and auditable. When enabled, a Bedrock model proposes part number, quantity, material and tolerance from email/PDF text. The program accepts a proposal only when its field has a matching source excerpt, passes type/range checks and reports confidence of at least 0.80; conflicting values go to the existing review path. Confidence is model-reported, not calibrated. The workflow records evidence and token usage, but sends no raw attachments to AgentCore Memory. Pricing and approvals never depend on model output alone.
 
 | AgentCore capability | Use in this design |
 | --- | --- |
 | Runtime | Hosts the Python workflow via `agent_runtime.py`; isolated invocation and deployment. |
 | Gateway | IAM-protected MCP entry to the two Lambda tools in `lambda_handler.py`. The cloud workflow calls both tools via Gateway, never directly. |
 | Memory | Short-term RFQ session state: prior quote number, approval/review state and context for follow-up invocations. Raw attachments are not stored there. |
+| Bedrock model (optional) | Converse API extracts candidate fields from searchable email/PDF text; the feature remains off unless `BEDROCK_EXTRACTION_MODEL_ID` is set. |
 | Identity | IAM roles and SigV4 are used for Runtime-to-Gateway and Gateway-to-Lambda access. No third-party OAuth is required. |
 | Observability | Runtime errors are visible in CloudWatch; quote number and part number are the correlation keys. Distributed traces have not been verified. |
 | Code Interpreter | Not needed: fixed arithmetic in a tested tool is cheaper and reproducible. |
@@ -70,7 +77,8 @@ Use **ap-southeast-1 (Singapore)** for a Malaysian customer, subject to contract
 1. Use a global AWS account with AgentCore access and check `aws sts get-caller-identity`. The AWS Free account plan does not offer AgentCore; a Paid plan can apply eligible new-user credits. Provisioning and invocations may incur charges.
 2. Review and install the Python dependencies in `pyproject.toml` for **Linux ARM64 / Python 3.13** into an isolated target directory. Build the deployment artifact with `python scripts/build_runtime_zip.py /path/to/target`. The output `runtime-package.zip` contains code and dependencies only; sample RFQ files are passed in the invocation payload.
 3. Upload the repository source and `runtime-package.zip` to AWS CloudShell. In the source directory, run `AWS_REGION=ap-southeast-1 python3 scripts/provision_aws.py`. This creates the pricing Lambda, IAM-protected MCP Gateway, and short-term Memory, then writes their nonsecret IDs to `.env.aws.example`.
-4. Run `AWS_REGION=ap-southeast-1 python3 scripts/deploy_runtime.py /path/to/runtime-package.zip`. This creates or updates a private S3 artifact bucket, a narrowly scoped execution role, and a Python 3.13 CodeZip Runtime with a five-minute idle timeout. The Runtime role may call only this Gateway and Memory and read its deployment ZIP. Check the reported Runtime status and invoke with the payload shape below. Verify both Gateway tools, Memory events, and CloudWatch logs before claiming a successful cloud run.
+4. Run `AWS_REGION=ap-southeast-1 python3 scripts/deploy_runtime.py /path/to/runtime-package.zip`. This creates or updates a private S3 artifact bucket, a narrowly scoped execution role, and a Python 3.13 CodeZip Runtime with a five-minute idle timeout. By default, the Runtime role may call only this Gateway and Memory and read its deployment ZIP. Check the reported Runtime status and invoke with the payload shape below. Verify both Gateway tools, Memory events, and CloudWatch logs before claiming a successful cloud run.
+5. To enable the optional extraction step, first choose a model or inference profile supported in the Bedrock source region and available to the account. Set its exact ID in `.env.aws.example` as `BEDROCK_EXTRACTION_MODEL_ID=...`, rebuild the Runtime ZIP, then run the deployment command again. The deploy script adds `bedrock:InvokeModel` permission scoped to the foundation model ARN or to the selected inference profile and its destination model ARNs. Cross-Region profiles can route outside Singapore; check the model's current regional routing and data residency requirements before using customer documents. Invocation usage is billable; the disabled default makes no model call.
 
 Runtime payload shape:
 
@@ -94,11 +102,12 @@ The second command saves `quote.json`, `quotation.pdf` and `previous_session_sta
 
 ## Cost per quote
 
-There is no model invocation in the demonstrated path. Parse files locally in the Runtime, call Gateway only for fixed calculations, keep Memory events small, use short retention, avoid always-on compute and avoid storing attachments in Memory. The variable cloud cost is roughly Runtime compute + Gateway requests + Lambda invocations/duration + Memory events/storage + logs, plus deployment storage. Measure actual per-quote metrics in CloudWatch after deployment. No precise AWS price estimate is asserted without a live account/usage measurement.
+The default path makes no model invocation. When enabled, each text email or searchable PDF causes one Bedrock Converse request; its input/output tokens are recorded in `extraction_audit`. Total cloud cost is Runtime compute + Gateway requests + Lambda invocations/duration + Memory events/storage + logs + any Bedrock input/output tokens, plus deployment storage. Check current model pricing and routing before enabling, keep Memory events small, and avoid always-on compute. No precise per-quote estimate is asserted without a live usage measurement.
 
 ## Known limits
 
 - The live Runtime invocation returned a quotation and the next invocation retrieved the saved session state from Memory. Gateway protocol support includes MCP `2026-07-28`; the original `2025-06-18` request failed because that version was not enabled.
+- Optional Bedrock extraction is implemented but has not been enabled or verified in the live Runtime. Model access, model choice, regional routing and billable invocation must be configured first.
 - The parsers target text PDFs and table-like Excel/PowerPoint plus the provided email layout. Scanned drawings require OCR; arbitrary layouts need a constrained extraction step and human checks.
 - PDF output is a draft quotation, not an approval workflow UI. Approval status is pending; no human sign-off is simulated.
 - Tax, freight, currency conversion, shipping and feasibility are excluded and stated as assumptions.
@@ -110,4 +119,6 @@ There is no model invocation in the demonstrated path. Parse files locally in th
 - [Gateway Lambda target and schema](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-add-target-api-target-config.html)
 - [Gateway IAM authorization](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-create-api.html)
 - [AgentCore Memory SDK](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/aws-sdk-memory.html)
+- [Bedrock Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html)
+- [Bedrock model regional availability](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html)
 - [Supported AWS Regions](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-regions.html)

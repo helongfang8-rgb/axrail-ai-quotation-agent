@@ -36,7 +36,22 @@ def ensure_bucket(s3, name):
         "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]})
 
 
-def ensure_role(iam, name, account, bucket, key, gateway_id, memory_id):
+def model_resources(model_id):
+    if not model_id:
+        return []
+    if model_id.startswith("arn:aws:bedrock:") and ":inference-profile/" in model_id:
+        identifier = model_id
+    elif model_id.startswith(("apac.", "us.", "eu.", "global.")):
+        identifier = model_id
+    else:
+        return [model_id if model_id.startswith("arn:aws:bedrock:") else
+                f"arn:aws:bedrock:{REGION}::foundation-model/{model_id}"]
+    profile = boto3.client("bedrock", region_name=REGION).get_inference_profile(
+        inferenceProfileIdentifier=identifier)
+    return [profile["inferenceProfileArn"], *[item["modelArn"] for item in profile.get("models", [])]]
+
+
+def ensure_role(iam, name, account, bucket, key, gateway_id, memory_id, model_id=""):
     trust = {"Version": "2012-10-17", "Statement": [{
         "Effect": "Allow", "Principal": {"Service": "bedrock-agentcore.amazonaws.com"},
         "Action": "sts:AssumeRole", "Condition": {
@@ -56,6 +71,9 @@ def ensure_role(iam, name, account, bucket, key, gateway_id, memory_id):
                                        "logs:DescribeLogStreams", "logs:CreateLogStream", "logs:PutLogEvents"],
          "Resource": f"arn:aws:logs:{REGION}:{account}:log-group:/aws/bedrock-agentcore/runtimes/*"},
     ]}
+    if model_id:
+        resources = model_resources(model_id)
+        policy["Statement"].append({"Effect": "Allow", "Action": "bedrock:InvokeModel", "Resource": resources})
     iam.put_role_policy(RoleName=name, PolicyName="QuotationRuntimeAccess", PolicyDocument=json.dumps(policy))
     return arn
 
@@ -80,7 +98,8 @@ def main():
     ensure_bucket(s3, bucket)
     s3.upload_file(str(args.package), bucket, key, ExtraArgs={"ServerSideEncryption": "AES256"})
     iam = boto3.client("iam")
-    role_arn = ensure_role(iam, "axrail-quotation-runtime-role", account, bucket, key, gateway_id, memory_id)
+    role_arn = ensure_role(iam, "axrail-quotation-runtime-role", account, bucket, key, gateway_id, memory_id,
+                           config.get("BEDROCK_EXTRACTION_MODEL_ID", ""))
     time.sleep(10)
     name = "axrailQuotationAgent"
     existing = next((a for a in control.list_agent_runtimes()["agentRuntimes"]

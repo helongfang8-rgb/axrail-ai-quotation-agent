@@ -1,5 +1,6 @@
 """Parse source files into one RFQ schema with field-level provenance."""
 import re
+import math
 from pathlib import Path
 from zipfile import ZipFile
 from xml.etree import ElementTree as ET
@@ -129,12 +130,120 @@ def parse_pdf(path):
 PARSERS = {".txt": parse_email, ".xlsx": parse_xlsx, ".pptx": parse_pptx, ".pdf": parse_pdf}
 
 
-def normalize(paths, context=None):
+def _plain_text_for_model(path):
+    if path.suffix.lower() == ".txt":
+        return path.read_text(encoding="utf-8")
+    if path.suffix.lower() == ".pdf":
+        from pypdf import PdfReader
+        return "\n".join(page.extract_text() or "" for page in PdfReader(path).pages)
+    return ""
+
+
+def _compact(text):
+    return " ".join(str(text).split()).casefold()
+
+
+def _proposal_value(field, value):
+    if value is None:
+        return None
+    if field == "part_no":
+        return value if isinstance(value, str) and PART.fullmatch(value.strip().upper()) else None
+    if field == "qty":
+        return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+    if field == "material":
+        return value.upper().strip() if isinstance(value, str) and value.strip() else None
+    if field == "tolerance_mm":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        number = float(value)
+        return number if math.isfinite(number) and 0 < number < 100 else None
+    return None
+
+
+def _evidence_supports(field, value, evidence, document_text):
+    if not isinstance(evidence, str) or not evidence.strip() or _compact(evidence) not in _compact(document_text):
+        return False
+    if field == "part_no":
+        return value in evidence.upper()
+    if field == "qty":
+        return _qty(evidence) == value
+    if field == "material":
+        return value.casefold() in evidence.casefold()
+    if field == "tolerance_mm":
+        number = _number(evidence)
+        return number is not None and math.isclose(number, value, rel_tol=0, abs_tol=1e-9)
+    return False
+
+
+def _merge_model_proposals(result, merged, path, text, extracted):
+    source = f"{path.name}:bedrock"
+    result["extraction_audit"].append({
+        "source": path.name,
+        "model_id": extracted.get("model_id"),
+        "status": "succeeded",
+        "proposed_parts": len(extracted["parts"]),
+        "usage": extracted.get("usage", {}),
+    })
+    fields = ("part_no", "qty", "material", "tolerance_mm")
+    for proposal in extracted["parts"]:
+        if not isinstance(proposal, dict):
+            result["extraction_issues"].append({"part_no": "UNKNOWN", "field": "record", "message": "Model returned a malformed part record"})
+            continue
+        part_no = _proposal_value("part_no", proposal.get("part_no"))
+        pn_evidence = proposal.get("evidence", {}).get("part_no") if isinstance(proposal.get("evidence"), dict) else None
+        pn_confidence = proposal.get("confidence", {}).get("part_no") if isinstance(proposal.get("confidence"), dict) else None
+        valid_pn_confidence = (isinstance(pn_confidence, (int, float)) and not isinstance(pn_confidence, bool)
+                              and math.isfinite(float(pn_confidence)) and 0.80 <= pn_confidence <= 1)
+        if part_no and (not valid_pn_confidence or not _evidence_supports("part_no", part_no.upper(), pn_evidence, text)):
+            result["extraction_issues"].append({"part_no": "UNKNOWN", "field": "part_no",
+                "message": "Bedrock part number was not accepted: confidence or source evidence did not pass validation"})
+            continue
+        if not part_no:
+            result["extraction_issues"].append({"part_no": "UNKNOWN", "field": "part_no", "message": "Model proposed a part number that failed validation"})
+            continue
+        part_no = part_no.upper()
+        part = merged.get(part_no)
+        if part is None:
+            part = {"part_no": part_no, "description": "", "material": "", "qty": None,
+                    "tolerance_mm": None, "mass_kg": None, "cycle_min": None, "finish": "none",
+                    "sources": []}
+            merged[part_no] = part
+        part.setdefault("field_evidence", {})
+        for field in fields[1:]:
+            proposed = _proposal_value(field, proposal.get(field))
+            if proposed is None:
+                continue
+            evidence = proposal.get("evidence", {}).get(field) if isinstance(proposal.get("evidence"), dict) else None
+            confidence = proposal.get("confidence", {}).get(field) if isinstance(proposal.get("confidence"), dict) else None
+            valid_confidence = (isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
+                                and math.isfinite(float(confidence)) and 0 <= confidence <= 1)
+            if not valid_confidence or confidence < 0.80 or not _evidence_supports(field, proposed, evidence, text):
+                result["extraction_issues"].append({
+                    "part_no": part_no, "field": field,
+                    "message": f"Bedrock proposal for {field} was not accepted: confidence or source evidence did not pass validation",
+                })
+                continue
+            existing = part.get(field)
+            if existing in (None, ""):
+                part[field] = proposed
+            elif existing != proposed:
+                result["conflicts"].append({"part_no": part_no, "field": field,
+                    "values": [existing, proposed], "sources": part["sources"] + [source],
+                    "evidence": evidence, "confidence": confidence})
+            part["field_evidence"][field] = {
+                "text": evidence, "source": source,
+                "confidence": round(float(confidence), 3), "confidence_type": "model_self_assessed",
+            }
+        if source not in part["sources"]:
+            part["sources"].append(source)
+
+
+def normalize(paths, context=None, extractor=None):
     """Merge duplicate parts. Conflicting nonblank values hold the line for review."""
-    result = {"parts": [], "conflicts": [], **(context or {})}
+    paths = [Path(path) for path in paths]
+    result = {"parts": [], "conflicts": [], "extraction_issues": [], "extraction_audit": [], **(context or {})}
     merged = {}
     for path in paths:
-        path = Path(path)
         if path.suffix.lower() not in PARSERS: raise ValueError(f"Unsupported format: {path}")
         parsed = PARSERS[path.suffix.lower()](path)
         for key in ("rfq_no", "customer", "buyer_name", "buyer_email", "delivery", "requested_discount_pct"):
@@ -151,6 +260,22 @@ def normalize(paths, context=None):
                 elif new not in (None, "") and old != new:
                     result["conflicts"].append({"part_no": no, "field": key, "values": [old,new], "sources": prior["sources"] + part["sources"]})
             prior["sources"].extend(part["sources"])
+    if extractor is not None:
+        for path in paths:
+            if path.suffix.lower() not in (".txt", ".pdf"):
+                continue
+            try:
+                text = _plain_text_for_model(path)
+                if not text.strip():
+                    result["extraction_issues"].append({"part_no": "ALL", "field": "document", "message": f"{path.name} has no searchable text; OCR is required"})
+                    continue
+                extracted = extractor.extract(path.name, text)
+                extracted["model_id"] = getattr(extractor, "model_id", None)
+                _merge_model_proposals(result, merged, path, text, extracted)
+            except Exception as error:
+                result["extraction_audit"].append({"source": path.name, "model_id": getattr(extractor, "model_id", None),
+                                                    "status": "unavailable", "error_type": type(error).__name__})
+                result["extraction_issues"].append({"part_no": "ALL", "field": "model", "message": f"Bedrock extraction unavailable for {path.name} ({type(error).__name__}); rule-based parsing was used"})
     result["parts"] = sorted(merged.values(), key=lambda p: p["part_no"])
     if not result.get("rfq_no"): result["rfq_no"] = "RFQ-UNKNOWN"
     return result

@@ -7,6 +7,7 @@ dependencies = ["python-docx>=1.1,<2", "python-pptx>=1.0,<2", "pypdf>=5,<7", "re
 
 [project.optional-dependencies]
 aws = ["bedrock-agentcore>=1,<2", "boto3>=1.35,<2", "requests>=2.31,<3"]
+bedrock = ["boto3>=1.35,<2"]
 test = ["pytest>=8,<10"]
 
 [project.scripts]

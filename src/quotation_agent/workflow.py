@@ -8,9 +8,9 @@ from .ingest import normalize
 from .pricing import approval_policy, money, price_line
 
 
-def build_quote(paths, context=None, today=None, price_tool=price_line, approval_tool=approval_policy):
+def build_quote(paths, context=None, today=None, price_tool=price_line, approval_tool=approval_policy, extractor=None):
     today = today or date.today()
-    rfq = normalize(paths, context)
+    rfq = normalize(paths, context, extractor=extractor)
     conflict_by_part = {}
     for conflict in rfq["conflicts"]:
         if conflict["field"] in ("material", "qty", "tolerance_mm", "mass_kg", "cycle_min", "finish"):
@@ -22,7 +22,8 @@ def build_quote(paths, context=None, today=None, price_tool=price_line, approval
             priced = {"status": "hold", "part_no": part["part_no"],
                       "reasons": [f"Conflicting {c['field']}: {c['values']} ({', '.join(c['sources'])})" for c in conflict_by_part[part["part_no"]]]}
         line = {"part_no": part["part_no"], "description": part["description"],
-                "material": part["material"], "qty": part["qty"], "sources": part["sources"], **priced}
+                "material": part["material"], "qty": part["qty"], "sources": part["sources"],
+                "field_evidence": part.get("field_evidence", {}), **priced}
         lines.append(line)
         if line["status"] == "hold":
             review.append({"part_no": part["part_no"], "owner": "estimator", "status": "open", "reasons": line["reasons"]})
@@ -32,6 +33,9 @@ def build_quote(paths, context=None, today=None, price_tool=price_line, approval
                        "reasons": [f"Customer requested {rfq['requested_discount_pct']}% off; standard volume discounts only were applied"]})
     if approval["status"] == "pending_manager_approval":
         review.append({"part_no": "QUOTE", "owner": "sales manager", "status": "open", "reasons": approval["reasons"]})
+    for issue in rfq.get("extraction_issues", []):
+        review.append({"part_no": issue["part_no"], "owner": "estimator", "status": "open",
+                       "reasons": [issue["message"]]})
     result = {"quote_no": f"Q-{rfq['rfq_no']}", "rfq_no": rfq["rfq_no"],
               "customer": rfq.get("customer") or "Customer not provided",
               "buyer_name": rfq.get("buyer_name") or "Buyer",
@@ -39,6 +43,7 @@ def build_quote(paths, context=None, today=None, price_tool=price_line, approval
               "valid_until": (today + timedelta(days=30)).isoformat(),
               "currency": "MYR", "delivery": rfq.get("delivery") or "To confirm",
               "requested_discount_pct": rfq.get("requested_discount_pct"),
+              "extraction_audit": rfq.get("extraction_audit", []),
               "lines": lines, "total_myr": approval["total_myr"], "approval": approval,
               "review": review,
               "assumptions": [
