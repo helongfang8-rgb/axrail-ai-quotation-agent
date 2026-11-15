@@ -1,0 +1,20 @@
+[project]
+name = "axrail-quotation-agent"
+version = "0.1.0"
+description = "Auditable CNC RFQ quotation workflow for Amazon Bedrock AgentCore"
+requires-python = ">=3.11"
+dependencies = ["python-docx>=1.1,<2", "python-pptx>=1.0,<2", "pypdf>=5,<7", "reportlab>=4,<5"]
+
+[project.optional-dependencies]
+aws = ["bedrock-agentcore>=1,<2", "boto3>=1.35,<2", "requests>=2.31,<3"]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+quote-rfq = "quotation_agent.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

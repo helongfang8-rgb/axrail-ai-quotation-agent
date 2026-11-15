@@ -1,0 +1,8 @@
+{
+  "rfq_no": "RFQ-2026-118",
+  "customer": "Example Customer Sdn Bhd",
+  "buyer_name": "Alex Tan",
+  "buyer_email": "buyer@example-customer.test",
+  "delivery": "6 weeks",
+  "requested_discount_pct": 15
+}

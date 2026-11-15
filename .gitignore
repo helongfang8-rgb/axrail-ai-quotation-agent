@@ -1,0 +1,14 @@
+__pycache__/
+.pytest_cache/
+.venv/
+*.egg-info/
+output*/
+.bedrock_agentcore.yaml
+.env
+.env.aws.example
+.DS_Store
+inputs/*.docx
+data/
+axrail-quotation-agent-source.zip
+runtime-package.zip
+cloud-setup.zip

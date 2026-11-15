@@ -1,0 +1,23 @@
+[
+  {
+    "name": "price_line",
+    "description": "Apply the fixed CNC material, machine, finish, setup, margin and volume discount rules to one part. Returns a hold when a rate or input is missing.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {"part": {"type": "object", "description": "Normalized part with part_no, material, qty, tolerance_mm, mass_kg, cycle_min and finish"}},
+      "required": ["part"]
+    }
+  },
+  {
+    "name": "approval_policy",
+    "description": "Apply deterministic manager approval rules to quoted lines and a customer discount request.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "lines": {"type": "array", "items": {"type": "object"}},
+        "requested_discount_pct": {"type": "number"}
+      },
+      "required": ["lines"]
+    }
+  }
+]

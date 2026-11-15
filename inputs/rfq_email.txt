@@ -1,0 +1,23 @@
+From: Alex Tan <buyer@example-customer.test>
+To: sales@example-cnc-shop.test
+Date: 2 Nov 2026 09:14 (UTC+8)
+Subject: RFQ-2026-118 - CNC parts, delivery in 6 weeks
+
+Hi team,
+
+Please quote the parts below. Our part list (Excel) and spec slides are also attached.
+Delivery needed in 6 weeks to our Shah Alam plant.
+
+  1. BRK-100 Mounting bracket, AL6061, 500 pcs, tol +/-0.10 mm, 0.40 kg, approx 6 min, anodise
+  2. SHF-220 Drive shaft D20x150, SS304, 200 pcs, tol +/-0.02 mm, 0.37 kg, approx 9 min, no finish
+  3. CVR-310 Pump cover, AL6061, 1,000 pcs, tol +/-0.05 mm, 0.85 kg, approx 12 min, anodise
+  4. SPC-050 Spacer, SS304, qty to follow, tol +/-0.10 mm, 0.05 kg, approx 2 min, no finish
+  5. HSG-400 Valve housing, Ti Gr5, 50 pcs, tol +/-0.005 mm, 1.20 kg, approx 40 min, no finish
+
+Can you also give us 15% off as we are a new customer?
+
+Thanks,
+Alex Tan
+Procurement, Example Customer Sdn Bhd
+
+[SAMPLE DATA - fictional, for a candidate test only]
